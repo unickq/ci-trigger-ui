@@ -9,6 +9,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   test: {
     environment: "node",
+    reporters: ["default", "junit"],
+    outputFile: "test-results.xml",
   },
   resolve: {
     alias: {
