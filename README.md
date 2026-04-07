@@ -29,14 +29,21 @@ npm run test     # run tests
 
 ### GitHub Pages
 
-Build and deploy via GitHub Actions. Add the following to your workflow:
+1. Go to **Settings → Pages** → Source: **GitHub Actions**
+2. Add `VITE_CIRCLECI_PROXY` under **Settings → Secrets and variables → Actions**
+3. Push to `main` — the workflow deploys automatically
 
-```yaml
-- name: Build
-  run: npm run build
-  env:
-    VITE_CIRCLECI_PROXY: ${{ secrets.VITE_CIRCLECI_PROXY }}
-```
+The workflow sets `VITE_BASE_URL=/{repo-name}/` automatically so the app works from the subdirectory.
+
+### Cloudflare Pages
+
+1. Fork or push this repo to GitHub
+2. Go to [Cloudflare Pages](https://pages.cloudflare.com) → Create a project → Connect to Git
+3. Configure the build:
+   - **Build command:** `npm run build`
+   - **Build output directory:** `dist`
+4. Add environment variable `VITE_CIRCLECI_PROXY` (see below) under **Settings → Environment variables**
+5. Deploy
 
 ### CircleCI CORS proxy
 
