@@ -31,7 +31,7 @@ npm run test     # run tests
 
 1. Go to **Settings → Pages** → Source: **GitHub Actions**
 2. Add `VITE_CIRCLECI_PROXY` under **Settings → Secrets and variables → Actions**
-3. Push to `main` — the workflow deploys automatically
+3. Push to `main` - the workflow deploys automatically
 
 The workflow sets `VITE_BASE_URL=/{repo-name}/` automatically so the app works from the subdirectory.
 
@@ -42,12 +42,19 @@ The workflow sets `VITE_BASE_URL=/{repo-name}/` automatically so the app works f
 3. Configure the build:
    - **Build command:** `npm run build`
    - **Build output directory:** `dist`
-4. Add environment variable `VITE_CIRCLECI_PROXY` (see below) under **Settings → Environment variables**
+4. Add environment variable under **Settings → Environment variables**:
+   - `VITE_CIRCLECI_PROXY` = `/proxy/circleci`
 5. Deploy
+
+The repo includes a Pages Function (`functions/proxy/circleci/`) that proxies CircleCI API requests - no separate Cloudflare Worker needed.
 
 ### CircleCI CORS proxy
 
-CircleCI's API does not allow direct browser requests from arbitrary origins. A [Cloudflare Worker](https://workers.cloudflare.com) is needed as a proxy.
+CircleCI's API does not allow direct browser requests from arbitrary origins. A proxy is needed.
+
+**On Cloudflare Pages** - handled automatically via the included Pages Function. Set `VITE_CIRCLECI_PROXY=/proxy/circleci`.
+
+**On GitHub Pages / Docker** - deploy a [Cloudflare Worker](https://workers.cloudflare.com) with the following code and set `VITE_CIRCLECI_PROXY=https://your-worker.workers.dev`:
 
 **Worker code:**
 
