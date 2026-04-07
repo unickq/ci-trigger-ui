@@ -219,6 +219,15 @@ export default function App() {
         >
           ci-trigger-ui
         </a>
+        {" · "}
+        <a
+          href={`https://github.com/unickq/ci-trigger-ui/commit/${__COMMIT__}`}
+          target="_blank"
+          rel="noreferrer"
+          className="font-mono hover:text-atom-fg transition"
+        >
+          {__COMMIT__}
+        </a>
         {" · "}data stored locally in your browser
       </footer>
 
