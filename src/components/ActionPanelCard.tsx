@@ -1,289 +1,410 @@
-import { useState } from 'react'
-import type { ProviderConfig, SavedAction } from '@/lib/types'
+import { useState } from "react";
+import type { ProviderConfig, RunLog, SavedAction } from "@/lib/types";
+import { getProviderDef } from "@/lib/providers";
+import { appendRunLog, updateRunLogUrl } from "@/lib/storage";
+import { createId, parseErrorMessage } from "@/lib/utils";
+import Modal from "@/components/Modal";
+import JsonEditor from "@/components/JsonEditor";
+
+type DragHandle = { attributes: object; listeners: object | undefined };
 
 type Props = {
-  action: SavedAction
-  providers: ProviderConfig[]
-  onEdit: (action: SavedAction) => void
-  onFork: (action: SavedAction) => void
-  onDelete: (id: string) => void
-}
-
-function isGitHubConfig(config: SavedAction['config']): config is Extract<SavedAction['config'], { owner: string }> {
-  return typeof config === 'object' && config !== null && 'owner' in config
-}
-
-function isCircleCiConfig(config: SavedAction['config']): config is Extract<SavedAction['config'], { projectSlug: string }> {
-  return typeof config === 'object' && config !== null && 'projectSlug' in config
-}
-
-function repoUrlFromSlug(slug: string): string | null {
-  const [vcs, org, repo] = slug.split('/')
-  if (!org || !repo) return null
-  if (vcs === 'gh' || vcs === 'github') return `https://github.com/${org}/${repo}`
-  if (vcs === 'bb' || vcs === 'bitbucket') return `https://bitbucket.org/${org}/${repo}`
-  return null
-}
+  action: SavedAction;
+  providers: ProviderConfig[];
+  lastRun?: RunLog;
+  dragHandle?: DragHandle;
+  onEdit: (action: SavedAction) => void;
+  onFork: (action: SavedAction) => void;
+  onDelete: (id: string) => void;
+  onPin: (id: string) => void;
+  onRunComplete?: () => void;
+};
 
 function ProviderIcon({ type }: { type: string }) {
-  const iconId = type === 'github' ? 'github-icon' : type === 'circleci' ? 'circleci-icon' : null
-  if (!iconId) return null
+  let iconId: string | null = null;
+  try {
+    iconId = getProviderDef(type as never).iconId;
+  } catch {
+    return null;
+  }
   return (
-    <svg className="size-4 shrink-0 fill-zinc-300" aria-hidden>
+    <svg className="size-4 shrink-0 text-atom-fg-sub" aria-hidden>
       <use href={`/icons.svg#${iconId}`} />
     </svg>
-  )
+  );
 }
 
-function buildCurl(action: SavedAction, provider: ProviderConfig): string {
-  const base = provider.baseUrl
-
-  if (isGitHubConfig(action.config)) {
-    const { owner, repo, workflowId, ref, inputs } = action.config
-    const url = `${base ?? 'https://api.github.com'}/repos/${owner}/${repo}/actions/workflows/${workflowId}/dispatches`
-    const body = JSON.stringify({ ref, inputs: inputs ?? {} })
-    return [
-      `curl -X POST \\`,
-      `  -H "Accept: application/vnd.github+json" \\`,
-      `  -H "Authorization: Bearer ${provider.token}" \\`,
-      `  ${url} \\`,
-      `  -d '${body}'`,
-    ].join('\n')
-  }
-
-  if (isCircleCiConfig(action.config)) {
-    const { projectSlug, branch, parameters } = action.config
-    const url = `${base ?? 'https://circleci.com/api/v2'}/project/${projectSlug}/pipeline`
-    const body = JSON.stringify({ branch, parameters: parameters ?? {} })
-    return [
-      `curl -X POST \\`,
-      `  -H "Circle-Token: ${provider.token}" \\`,
-      `  -H "Content-Type: application/json" \\`,
-      `  ${url} \\`,
-      `  -d '${body}'`,
-    ].join('\n')
-  }
-
-  return ''
+async function runAction(
+  action: SavedAction,
+  provider: ProviderConfig,
+): Promise<{ res: Response; responseJson: unknown }> {
+  const def = getProviderDef(provider.type);
+  const { url, init } = def.buildRequest(action, provider);
+  const res = await fetch(url, init);
+  const responseJson = await res.json().catch(() => res.status);
+  return { res, responseJson };
 }
 
-function resolveBase(provider: ProviderConfig, type: 'github' | 'circleci'): string {
-  if (provider.baseUrl) return provider.baseUrl
-  const isDev = import.meta.env.DEV
-  if (type === 'github') return isDev ? '/proxy/github' : 'https://api.github.com'
-  return isDev ? '/proxy/circleci' : 'https://circleci.com/api/v2'
-}
+export default function ActionPanelCard({
+  action,
+  providers,
+  lastRun,
+  dragHandle,
+  onEdit,
+  onFork,
+  onDelete,
+  onPin,
+  onRunComplete,
+}: Props) {
+  const provider = providers.find((p) => p.id === action.providerId);
 
-async function runAction(action: SavedAction, provider: ProviderConfig): Promise<Response> {
-  if (isGitHubConfig(action.config)) {
-    const { owner, repo, workflowId, ref, inputs } = action.config
-    const base = resolveBase(provider, 'github')
-    const url = `${base}/repos/${owner}/${repo}/actions/workflows/${workflowId}/dispatches`
-    return fetch(url, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${provider.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ ref, inputs: inputs ?? {} }),
-    })
+  const [showCurl, setShowCurl] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showParams, setShowParams] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [runStatus, setRunStatus] = useState<"success" | "error" | null>(null);
+  const [runError, setRunError] = useState("");
+  const [jobUrl, setJobUrl] = useState<string | null>(null);
+  const [showRunModal, setShowRunModal] = useState(false);
+  const [runParamsJson, setRunParamsJson] = useState("");
+
+  function openRunModal() {
+    const params = cardInfo?.params ?? {};
+    setRunParamsJson(JSON.stringify(params, null, 2));
+    setShowRunModal(true);
+    setShowMenu(false);
   }
 
-  if (isCircleCiConfig(action.config)) {
-    const { projectSlug, branch, parameters } = action.config
-    const base = resolveBase(provider, 'circleci')
-    const url = `${base}/project/${projectSlug}/pipeline`
-    return fetch(url, {
-      method: 'POST',
-      headers: {
-        'Circle-Token': provider.token,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ branch, parameters: parameters ?? {} }),
-    })
+  function handleRunWithParams(e: React.FormEvent) {
+    e.preventDefault();
+    let params: Record<string, unknown> = {};
+    try {
+      params = JSON.parse(runParamsJson);
+    } catch {
+      return;
+    }
+    const def = provider ? getProviderDef(provider.type) : null;
+    const overriddenAction = def ? { ...action, config: def.mergeParams(action.config, params) } : action;
+    setShowRunModal(false);
+    handleRun(overriddenAction);
   }
 
-  return Promise.reject(new Error('Unknown action type'))
-}
-
-export default function ActionPanelCard({ action, providers, onEdit, onFork, onDelete }: Props) {
-  const provider = providers.find((p) => p.id === action.providerId)
-  const providerName = provider?.name ?? 'Unknown'
-
-  const [showCurl, setShowCurl] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [running, setRunning] = useState(false)
-  const [runStatus, setRunStatus] = useState<'success' | 'error' | null>(null)
-  const [runError, setRunError] = useState('')
-
-  async function handleRun() {
-    if (!provider) return
-    setRunning(true)
-    setRunStatus(null)
-    setRunError('')
+  async function handleRun(overrideAction?: SavedAction) {
+    if (!provider) return;
+    const actionToRun = overrideAction ?? action;
+    setRunning(true);
+    setRunStatus(null);
+    setRunError("");
+    setJobUrl(null);
+    const startedAt = new Date().toISOString();
+    const logId = createId();
+    let status: "success" | "error" = "success";
+    let errorMsg = "",
+      url: string | null = null;
+    let responsePayload: unknown;
 
     try {
-      const res = await runAction(action, provider)
+      const def = getProviderDef(provider.type);
+      const { res, responseJson } = await runAction(actionToRun, provider);
+      responsePayload = responseJson;
       if (res.ok || res.status === 204) {
-        setRunStatus('success')
+        url = def.buildResultUrl(actionToRun, responseJson);
+        setJobUrl(url);
+        setRunStatus("success");
+        if (def.fetchRunUrl) {
+          def.fetchRunUrl(actionToRun, provider, startedAt).then((runUrl) => {
+            if (runUrl) {
+              setJobUrl(runUrl);
+              updateRunLogUrl(logId, runUrl);
+              onRunComplete?.();
+            }
+          });
+        }
       } else {
-        const text = await res.text().catch(() => res.statusText)
-        setRunStatus('error')
-        setRunError(`${res.status}: ${text}`)
+        const text = typeof responseJson === "string" ? responseJson : JSON.stringify(responseJson) || res.statusText;
+        status = "error";
+        errorMsg = `${res.status}: ${text}`;
+        setRunStatus("error");
+        setRunError(errorMsg);
       }
     } catch (e) {
-      setRunStatus('error')
-      setRunError(e instanceof Error ? e.message : 'Unknown error')
+      status = "error";
+      errorMsg = e instanceof Error ? e.message : "Unknown error";
+      setRunStatus("error");
+      setRunError(errorMsg);
     } finally {
-      setRunning(false)
+      appendRunLog({
+        id: logId,
+        actionId: action.id,
+        startedAt,
+        status,
+        requestPayload: actionToRun.config,
+        responsePayload,
+        error: errorMsg || undefined,
+        url: url ?? undefined,
+      });
+      onRunComplete?.();
+      setRunning(false);
     }
   }
 
-  const curl = provider ? buildCurl(action, provider) : ''
+  const curl = provider ? getProviderDef(provider.type).buildCurl(action, provider) : "";
+  const cardInfo = provider ? getProviderDef(provider.type).buildCardInfo(action.config) : null;
+  const linkCls = "text-atom-blue hover:underline underline-offset-2 transition";
 
   return (
-    <div className="border border-zinc-800 rounded-xl p-3 space-y-2">
+    <div className="border border-atom-border rounded-xl p-3 space-y-2 bg-atom-surface">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          {provider && <ProviderIcon type={provider.type} />}
-          <div className="text-sm font-medium truncate">{action.name}</div>
+          {dragHandle && (
+            <button
+              type="button"
+              className="shrink-0 cursor-grab active:cursor-grabbing text-atom-fg-muted hover:text-atom-fg-sub transition touch-none"
+              {...dragHandle.attributes}
+              {...dragHandle.listeners}
+              aria-label="Drag to reorder"
+            >
+              <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+                <circle cx="2" cy="2" r="1.5" />
+                <circle cx="8" cy="2" r="1.5" />
+                <circle cx="2" cy="7" r="1.5" />
+                <circle cx="8" cy="7" r="1.5" />
+                <circle cx="2" cy="12" r="1.5" />
+                <circle cx="8" cy="12" r="1.5" />
+              </svg>
+            </button>
+          )}
+          {provider && (
+            <span title={provider.name}>
+              <ProviderIcon type={provider.type} />
+            </span>
+          )}
+          <div className="text-sm font-medium text-atom-fg truncate">{action.name}</div>
+          <button
+            type="button"
+            onClick={() => onPin(action.id)}
+            title={action.pinned ? "Unpin" : "Pin"}
+            className={`shrink-0 transition ${action.pinned ? "text-atom-yellow" : "text-atom-fg-muted hover:text-atom-yellow"}`}
+          >
+            {action.pinned ? "★" : "☆"}
+          </button>
+          {lastRun && (
+            <span
+              title={lastRun.status === "success" ? "Last run succeeded" : `Last run failed: ${lastRun.error ?? ""}`}
+              className={`size-2 rounded-full shrink-0 ${lastRun.status === "success" ? "bg-atom-green" : "bg-atom-red"}`}
+            />
+          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => { setShowCurl((v) => !v); setRunStatus(null) }}
-            className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100"
-          >
-            curl
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setShowMenu((v) => !v);
+                setConfirmDelete(false);
+              }}
+              className="rounded-lg border border-atom-border px-2 py-1 text-xs text-atom-fg-muted transition hover:border-atom-blue hover:text-atom-blue"
+            >
+              ···
+            </button>
+            {showMenu && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setConfirmDelete(false);
+                  }}
+                />
+                <div className="absolute right-0 top-full z-20 mt-1 w-36 rounded-xl border border-atom-border bg-atom-raised py-1 shadow-xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCurl((v) => !v);
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-xs text-atom-fg-sub hover:bg-atom-border hover:text-atom-fg"
+                  >
+                    {showCurl ? "Hide curl" : "Show curl"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onFork(action);
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-xs text-atom-fg-sub hover:bg-atom-border hover:text-atom-fg"
+                  >
+                    Fork
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onEdit(action);
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-xs text-atom-fg-sub hover:bg-atom-border hover:text-atom-fg"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openRunModal}
+                    className="w-full px-3 py-1.5 text-left text-xs text-atom-fg-sub hover:bg-atom-border hover:text-atom-fg"
+                  >
+                    Run with params…
+                  </button>
+                  <div className="my-1 border-t border-atom-border" />
+                  {confirmDelete ? (
+                    <div className="flex items-center gap-1.5 px-3 py-1.5">
+                      <span className="text-xs text-atom-red">Sure?</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onDelete(action.id);
+                          setShowMenu(false);
+                        }}
+                        className="text-xs text-atom-red underline underline-offset-2 hover:brightness-125"
+                      >
+                        Yes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        className="text-xs text-atom-fg-muted hover:text-atom-fg"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(true)}
+                      className="w-full px-3 py-1.5 text-left text-xs text-atom-red hover:bg-atom-border"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
 
           <button
             type="button"
-            onClick={() => onFork(action)}
-            className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100"
-          >
-            Fork
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onEdit(action)}
-            className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100"
-          >
-            Edit
-          </button>
-
-          <button
-            type="button"
-            onClick={handleRun}
+            onClick={() => handleRun()}
             disabled={!provider || running}
-            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-100 transition hover:bg-zinc-700 disabled:opacity-40"
+            className="rounded-lg border border-atom-blue/50 bg-atom-blue/10 px-2.5 py-1 text-xs font-medium text-atom-blue transition hover:bg-atom-blue/20 disabled:opacity-40"
           >
-            {running ? '…' : 'Run'}
+            {running ? "…" : "Run"}
           </button>
         </div>
       </div>
 
-      {isGitHubConfig(action.config) && (
-        <div className="space-y-0.5 text-xs text-zinc-400">
+      {cardInfo && (
+        <div className="space-y-0.5 text-xs text-atom-fg-muted">
+          {cardInfo.repoUrl && cardInfo.repoLabel && (
+            <div>
+              <a href={cardInfo.repoUrl} target="_blank" rel="noreferrer" className={linkCls}>
+                {cardInfo.repoLabel}
+              </a>
+            </div>
+          )}
           <div>
-            <a
-              href={`https://github.com/${action.config.owner}/${action.config.repo}`}
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-zinc-200 underline underline-offset-2"
-            >
-              {action.config.owner}/{action.config.repo}
-            </a>
-          </div>
-          <div>
-            <a
-              href={`https://github.com/${action.config.owner}/${action.config.repo}/actions/workflows/${action.config.workflowId}`}
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-zinc-200 underline underline-offset-2"
-            >
-              {action.config.workflowId}
-            </a>
-            {' '}· {action.config.ref}
+            <a href={cardInfo.pipelineUrl} target="_blank" rel="noreferrer" className={linkCls}>
+              {cardInfo.pipelineLabel}
+            </a>{" "}
+            · {cardInfo.ref}
           </div>
         </div>
       )}
 
-      {isCircleCiConfig(action.config) && (() => {
-        const repoUrl = repoUrlFromSlug(action.config.projectSlug)
-        const [, org, repo] = action.config.projectSlug.split('/')
-        return (
-          <div className="space-y-0.5 text-xs text-zinc-400">
-            {repoUrl && (
-              <div>
-                <a
-                  href={repoUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="hover:text-zinc-200 underline underline-offset-2"
-                >
-                  {org}/{repo}
-                </a>
-              </div>
-            )}
-            <div>
+      {cardInfo?.params && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowParams((v) => !v)}
+            className="text-xs text-atom-fg-muted hover:text-atom-fg transition"
+          >
+            {showParams ? "▾" : "▸"} params ({Object.keys(cardInfo.params).length})
+          </button>
+          {showParams && (
+            <pre className="mt-1.5 rounded-lg bg-atom-bg border border-atom-border px-3 py-2 text-xs text-atom-cyan overflow-x-auto whitespace-pre font-mono">
+              {JSON.stringify(cardInfo.params, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {runStatus === "success" && (
+        <div className="rounded-lg border border-atom-green/30 bg-atom-green/10 px-3 py-1.5 text-xs text-atom-green">
+          Triggered successfully
+          {jobUrl && (
+            <>
+              {" · "}
               <a
-                href={`https://app.circleci.com/pipelines/${action.config.projectSlug}`}
+                href={jobUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="hover:text-zinc-200 underline underline-offset-2"
+                className="underline underline-offset-2 hover:brightness-125"
               >
-                CircleCI pipelines
+                Open
               </a>
-              {' '}· {action.config.branch}
-            </div>
-          </div>
-        )
-      })()}
-
-      <div className="text-xs text-zinc-500">Provider: {providerName}</div>
-
-      {runStatus === 'success' && (
-        <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/40 px-3 py-1.5 text-xs text-emerald-300">
-          Triggered successfully
+            </>
+          )}
         </div>
       )}
 
-      {runStatus === 'error' && (
-        <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-1.5 text-xs text-red-300 break-all">
-          {runError || 'Request failed'}
+      {runStatus === "error" && (
+        <div className="rounded-lg border border-atom-red/30 bg-atom-red/10 px-3 py-1.5 text-xs text-atom-red break-words">
+          {parseErrorMessage(runError) || "Request failed"}
         </div>
       )}
 
       {showCurl && (
         <div className="relative">
-          <pre className="rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2.5 pr-16 text-xs text-zinc-300 overflow-x-auto whitespace-pre">
+          <pre className="rounded-lg bg-atom-bg border border-atom-border px-3 py-2.5 pr-16 text-xs text-atom-cyan overflow-x-auto whitespace-pre font-mono">
             {curl}
           </pre>
           <button
             type="button"
             onClick={() => {
-              navigator.clipboard.writeText(curl)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 2000)
+              navigator.clipboard.writeText(curl);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
             }}
-            className="absolute right-2 top-2 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-400 transition hover:text-zinc-100"
+            className="absolute right-2 top-2 rounded border border-atom-border bg-atom-surface px-2 py-1 text-xs text-atom-fg-muted transition hover:text-atom-fg"
           >
-            {copied ? 'Copied' : 'Copy'}
+            {copied ? "Copied" : "Copy"}
           </button>
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={() => { if (window.confirm(`Delete "${action.name}"?`)) onDelete(action.id) }}
-        className="rounded-lg border border-red-900/60 px-3 py-1.5 text-xs text-red-400 transition hover:border-red-700 hover:text-red-300"
-      >
-        Delete
-      </button>
+      <Modal open={showRunModal} title={`Run: ${action.name}`} onClose={() => setShowRunModal(false)}>
+        <form onSubmit={handleRunWithParams} className="space-y-3">
+          <p className="text-xs text-atom-fg-muted">Params are used for this run only and won't be saved.</p>
+          <JsonEditor value={runParamsJson} onChange={setRunParamsJson} rows={6} />
+          <div className="flex gap-2 pt-1">
+            <button
+              type="submit"
+              disabled={running}
+              className="rounded-xl bg-atom-blue px-4 py-2 text-sm font-medium text-atom-bg transition hover:brightness-110 disabled:opacity-40"
+            >
+              {running ? "…" : "Run"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowRunModal(false)}
+              className="rounded-xl border border-atom-border px-4 py-2 text-sm text-atom-fg-sub transition hover:text-atom-fg"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
-  )
+  );
 }

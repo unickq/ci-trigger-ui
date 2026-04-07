@@ -1,73 +1,107 @@
-# React + TypeScript + Vite
+# CI Trigger
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A personal browser-based tool for triggering CI pipelines via personal access tokens. Supports GitHub Actions workflow dispatch and CircleCI pipelines.
 
-Currently, two official plugins are available:
+All data is stored in your browser's `localStorage` - no backend, no server.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+![CI Trigger UI](./screenshot.png)
 
-## React Compiler
+## Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **GitHub Actions** - trigger workflow dispatch with custom inputs
+- **CircleCI** - trigger pipelines with custom parameters
+- **Run logs** - history of triggered runs with status and links
+- **Run with params** - one-off run with overridden inputs/parameters without editing the action
+- **Import / Export** - backup and share action configs as JSON
+- **Extensible provider registry** - add new CI providers in one place (`src/lib/providerMeta.ts` + `src/lib/providers.ts`)
 
-## Expanding the ESLint configuration
+## Development
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev      # start dev server
+npm run build    # type-check + build
+npm run lint     # run ESLint
+npm run test     # run tests
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Deployment
+
+### GitHub Pages
+
+Build and deploy via GitHub Actions. Add the following to your workflow:
+
+```yaml
+- name: Build
+  run: npm run build
+  env:
+    VITE_CIRCLECI_PROXY: ${{ secrets.VITE_CIRCLECI_PROXY }}
+```
+
+### CircleCI CORS proxy
+
+CircleCI's API does not allow direct browser requests from arbitrary origins. A [Cloudflare Worker](https://workers.cloudflare.com) is needed as a proxy.
+
+**Worker code:**
 
 ```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+export default {
+  async fetch(request) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "*",
+        },
+      });
+    }
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
+    const url = new URL(request.url);
+    const targetUrl = "https://circleci.com/api/v2" + url.pathname + url.search;
+
+    const response = await fetch(targetUrl, {
+      method: request.method,
+      headers: request.headers,
+      body: request.method !== "GET" ? request.body : undefined,
+    });
+
+    const newHeaders = new Headers(response.headers);
+    newHeaders.set("Access-Control-Allow-Origin", "*");
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: newHeaders,
+    });
   },
-])
+};
+```
+
+Deploy the Worker, then set `VITE_CIRCLECI_PROXY=https://your-worker.workers.dev` as a GitHub Actions secret. GitHub API works directly from the browser without a proxy.
+
+### Docker
+
+```bash
+docker build -t ci-trigger-ui .
+docker run -p 8080:80 ci-trigger-ui
+```
+
+Open `http://localhost:8080`.
+
+To pass the CircleCI proxy URL at build time:
+
+```bash
+docker build --build-arg VITE_CIRCLECI_PROXY=https://your-worker.workers.dev -t ci-trigger-ui .
+```
+
+## Environment variables
+
+| Variable              | Description                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `VITE_CIRCLECI_PROXY` | Base URL for CircleCI API requests (Cloudflare Worker URL). Falls back to `https://circleci.com/api/v2` if not set. |
+
+For local development, create `.env.local`:
+
+```
+VITE_CIRCLECI_PROXY=https://your-worker.workers.dev
 ```

@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+@theme {
+  --color-atom-bg: #21252b;
+  --color-atom-surface: #282c34;
+  --color-atom-raised: #2c313a;
+  --color-atom-border: #3e4451;
+  --color-atom-fg: #abb2bf;
+  --color-atom-fg-sub: #828997;
+  --color-atom-fg-muted: #5c6370;
+  --color-atom-blue: #61afef;
+  --color-atom-green: #98c379;
+  --color-atom-red: #e06c75;
+  --color-atom-yellow: #e5c07b;
+  --color-atom-purple: #c678dd;
+  --color-atom-cyan: #56b6c2;
+  --color-atom-orange: #d19a66;
+}
+
+body {
+  background-color: #21252b;
+  color: #abb2bf;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3e4451 transparent;
+}

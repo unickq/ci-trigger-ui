@@ -1,255 +1,230 @@
-import type { ProviderConfig, ProviderType } from '@/lib/types'
-import { createId } from '@/lib/utils'
-import { useState } from 'react'
+import { useState } from "react";
+import type { ProviderConfig, ProviderType } from "@/lib/types";
+import { PROVIDERS, getProviderDef } from "@/lib/providers";
+import { createId } from "@/lib/utils";
+import Modal from "@/components/Modal";
+import { toast } from "@/lib/toast";
 
-type Props = {
-  providers: ProviderConfig[]
-  onSave: (provider: ProviderConfig) => void
-  onDelete: (id: string) => void
-}
+type Props = { providers: ProviderConfig[]; onSave: (p: ProviderConfig) => void; onDelete: (id: string) => void };
 
-type ProviderFormState = {
-  editingId: string | null
-  name: string
-  type: ProviderType
-  token: string
-  baseUrl: string
-}
+type ProviderFormState = { editingId: string | null; name: string; type: ProviderType; token: string; baseUrl: string };
 
-const initialForm: ProviderFormState = {
-  editingId: null,
-  name: '',
-  type: 'github',
-  token: '',
-  baseUrl: '',
-}
+const initialForm: ProviderFormState = { editingId: null, name: "", type: "github", token: "", baseUrl: "" };
+
+const inputCls =
+  "w-full rounded-xl border border-atom-border bg-atom-bg px-3 py-2 text-sm text-atom-fg outline-none transition focus:border-atom-blue placeholder:text-atom-fg-muted";
 
 export default function ProvidersPanel({ providers, onSave, onDelete }: Props) {
-  const [form, setForm] = useState<ProviderFormState>(initialForm)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<ProviderFormState>(initialForm);
+  const [error, setError] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const isEditing = form.editingId !== null
+  const isEditing = form.editingId !== null;
 
+  function openAdd() {
+    setForm(initialForm);
+    setError("");
+    setOpen(true);
+  }
+  function openEdit(p: ProviderConfig) {
+    setForm({ editingId: p.id, name: p.name, type: p.type, token: p.token, baseUrl: p.baseUrl ?? "" });
+    setError("");
+    setOpen(true);
+  }
+  function handleClose() {
+    setOpen(false);
+    setError("");
+  }
   function updateField<K extends keyof ProviderFormState>(key: K, value: ProviderFormState[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }))
-    if (error) setError('')
-    if (success) setSuccess('')
-  }
-
-  function handleEdit(provider: ProviderConfig) {
-    setForm({
-      editingId: provider.id,
-      name: provider.name,
-      type: provider.type,
-      token: provider.token,
-      baseUrl: provider.baseUrl ?? '',
-    })
-    setError('')
-    setSuccess('')
-  }
-
-  function handleCancel() {
-    setForm(initialForm)
-    setError('')
-    setSuccess('')
+    setForm((prev) => ({ ...prev, [key]: value }));
+    if (error) setError("");
   }
 
   function handleSave(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-
-    const trimmedName = form.name.trim()
-    const trimmedToken = form.token.trim()
-    const trimmedBaseUrl = form.baseUrl.trim()
-
-    if (!trimmedName) {
-      setError('Name is required.')
-      return
+    e.preventDefault();
+    if (!form.name.trim()) {
+      setError("Name is required.");
+      return;
     }
-
-    if (!trimmedToken) {
-      setError('Token is required.')
-      return
+    if (!form.token.trim()) {
+      setError("Token is required.");
+      return;
     }
-
-    const provider: ProviderConfig = {
+    onSave({
       id: form.editingId ?? createId(),
-      name: trimmedName,
+      name: form.name.trim(),
       type: form.type,
-      token: trimmedToken,
-      baseUrl: trimmedBaseUrl || undefined,
-    }
-
-    onSave(provider)
-    setForm(initialForm)
-    setError('')
-    setSuccess(isEditing ? 'Provider updated.' : `Provider saved.`)
+      token: form.token.trim(),
+      baseUrl: form.baseUrl.trim() || undefined,
+    });
+    toast(isEditing ? "Provider updated" : "Provider saved");
+    handleClose();
   }
 
   return (
-    <div className="space-y-4">
-      <form
-        onSubmit={handleSave}
-        className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
-      >
-        <div>
-          <h2 className="text-lg font-medium">{isEditing ? 'Edit provider' : 'Providers'}</h2>
-          {!isEditing && (
-            <p className="mt-1 text-sm text-zinc-400">
-              Save a personal token locally in your browser.
-            </p>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor="provider-name" className="block text-sm font-medium text-zinc-200">
-            Name
-          </label>
-          <input
-            id="provider-name"
-            type="text"
-            value={form.name}
-            onChange={(e) => updateField('name', e.target.value)}
-            placeholder="My GitHub token"
-            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-zinc-500"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor="provider-type" className="block text-sm font-medium text-zinc-200">
-            Type
-          </label>
-          <select
-            id="provider-type"
-            value={form.type}
-            onChange={(e) => updateField('type', e.target.value as ProviderType)}
-            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-zinc-500"
-          >
-            <option value="github">GitHub</option>
-            <option value="circleci">CircleCI</option>
-          </select>
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor="provider-token" className="block text-sm font-medium text-zinc-200">
-            Token
-          </label>
-          <input
-            id="provider-token"
-            type="password"
-            value={form.token}
-            onChange={(e) => updateField('token', e.target.value)}
-            placeholder="Paste personal access token"
-            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-zinc-500"
-          />
-          <p className="text-xs text-zinc-500">
-            Stored in localStorage. Fine for a personal MVP, not for shared use.
-          </p>
-        </div>
-
-        {/* <div className="space-y-2">
-          <label htmlFor="provider-base-url" className="block text-sm font-medium text-zinc-200">
-            Base URL <span className="text-zinc-500">(optional)</span>
-          </label>
-          <input
-            id="provider-base-url"
-            type="text"
-            value={form.baseUrl}
-            onChange={(e) => updateField('baseUrl', e.target.value)}
-            placeholder={
-              form.type === 'github'
-                ? 'https://api.github.com'
-                : 'https://circleci.com/api/v2'
-            }
-            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-zinc-500"
-          />
-        </div> */}
-
-        {error && (
-          <div className="rounded-xl border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">
-            {error}
-          </div>
-        )}
-
-        {success && (
-          <div className="rounded-xl border border-emerald-900/60 bg-emerald-950/40 px-3 py-2 text-sm text-emerald-300">
-            {success}
-          </div>
-        )}
-
-        <div className="flex gap-2">
+    <>
+      <div className="space-y-3">
+        <div className="flex justify-end">
           <button
-            type="submit"
-            className="inline-flex rounded-xl border border-zinc-700 bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 transition hover:bg-white"
+            type="button"
+            onClick={openAdd}
+            className="rounded-lg border border-atom-border px-2.5 py-1 text-xs text-atom-fg-sub transition hover:border-atom-blue hover:text-atom-blue"
           >
-            {isEditing ? 'Update' : 'Save provider'}
+            + Add
           </button>
-          {isEditing && (
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="inline-flex rounded-xl border border-zinc-700 px-4 py-2 text-sm text-zinc-300 transition hover:text-zinc-100"
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      </form>
-
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-        <div className="mb-3">
-          <h3 className="text-sm font-medium text-zinc-200">Saved providers</h3>
         </div>
 
         {providers.length === 0 ? (
-          <p className="text-sm text-zinc-500">No providers saved yet.</p>
+          <p className="text-sm text-atom-fg-muted">No providers yet.</p>
         ) : (
-          <div className="space-y-3">
-            {providers.map((provider) => (
+          <div className="space-y-2">
+            {providers.map((p) => (
               <div
-                key={provider.id}
-                className="flex items-start justify-between gap-4 rounded-xl border border-zinc-800 bg-zinc-950/80 p-3"
+                key={p.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-atom-border bg-atom-bg px-3 py-2"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium text-zinc-100">{provider.name}</p>
-                    <span className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400">
-                      {provider.type}
-                    </span>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <svg className="size-4 shrink-0 text-atom-fg-sub" aria-hidden>
+                    <use href={`/icons.svg#${getProviderDef(p.type).iconId}`} />
+                  </svg>
+                  <div className="min-w-0">
+                    <span className="text-sm text-atom-fg truncate">{p.name}</span>
+                    <p className="text-xs text-atom-fg-muted">••••••••{p.token.slice(-4)}</p>
                   </div>
-
-                  <p className="mt-1 break-all text-xs text-zinc-500">
-                    Token: ••••••••{provider.token.slice(-4)}
-                  </p>
-
-                  {provider.baseUrl && (
-                    <p className="mt-1 break-all text-xs text-zinc-500">
-                      Base URL: {provider.baseUrl}
-                    </p>
-                  )}
                 </div>
-
-                <div className="flex shrink-0 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleEdit(provider)}
-                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { if (window.confirm(`Delete "${provider.name}"?`)) onDelete(provider.id) }}
-                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100"
-                  >
-                    Delete
-                  </button>
+                <div className="flex shrink-0 gap-1.5">
+                  {confirmDeleteId === p.id ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onDelete(p.id);
+                          setConfirmDeleteId(null);
+                        }}
+                        className="rounded-lg border border-atom-red/50 bg-atom-red/10 px-2.5 py-1 text-xs text-atom-red transition hover:bg-atom-red/20"
+                      >
+                        Sure?
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="rounded-lg border border-atom-border px-2.5 py-1 text-xs text-atom-fg-muted transition hover:text-atom-fg"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => openEdit(p)}
+                        className="rounded-lg border border-atom-border px-2.5 py-1 text-xs text-atom-fg-sub transition hover:border-atom-blue hover:text-atom-blue"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(p.id)}
+                        className="rounded-lg border border-atom-border px-2.5 py-1 text-xs text-atom-fg-sub transition hover:border-atom-red hover:text-atom-red"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
           </div>
         )}
       </div>
-    </div>
-  )
+
+      <Modal open={open} title={isEditing ? "Edit provider" : "Add provider"} onClose={handleClose}>
+        <form onSubmit={handleSave} className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-atom-fg-sub">Name</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => updateField("name", e.target.value)}
+              placeholder="My GitHub token"
+              className={inputCls}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-atom-fg-sub">Type</label>
+            <select
+              value={form.type}
+              onChange={(e) => updateField("type", e.target.value as ProviderType)}
+              className={inputCls}
+            >
+              {PROVIDERS.map((p) => (
+                <option key={p.type} value={p.type}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-atom-fg-sub">Token</label>
+            <input
+              type="password"
+              value={form.token}
+              onChange={(e) => updateField("token", e.target.value)}
+              placeholder="Paste personal access token"
+              className={inputCls}
+            />
+            <p className="text-xs text-atom-fg-muted">
+              Stored in localStorage.{" "}
+              <a
+                href={getProviderDef(form.type).tokenHelpUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-atom-blue hover:underline underline-offset-2 transition"
+              >
+                Get token
+              </a>
+            </p>
+          </div>
+          <details className="group">
+            <summary className="cursor-pointer text-xs text-atom-fg-muted hover:text-atom-fg transition select-none">
+              Advanced
+            </summary>
+            <div className="mt-2 space-y-1.5">
+              <label className="block text-xs font-medium text-atom-fg-sub">
+                Base URL <span className="text-atom-fg-muted">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={form.baseUrl}
+                onChange={(e) => updateField("baseUrl", e.target.value)}
+                placeholder={getProviderDef(form.type).defaultBaseUrl}
+                className={inputCls}
+              />
+            </div>
+          </details>
+          {error && (
+            <div className="rounded-xl border border-atom-red/40 bg-atom-red/10 px-3 py-2 text-sm text-atom-red">
+              {error}
+            </div>
+          )}
+          <div className="flex gap-2 pt-1">
+            <button
+              type="submit"
+              className="rounded-xl bg-atom-blue px-4 py-2 text-sm font-medium text-atom-bg transition hover:brightness-110"
+            >
+              {isEditing ? "Update" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={handleClose}
+              className="rounded-xl border border-atom-border px-4 py-2 text-sm text-atom-fg-sub transition hover:text-atom-fg"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </>
+  );
 }
